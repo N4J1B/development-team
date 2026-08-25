@@ -1,4 +1,4 @@
-import { ARCHITECT_PROMPT, CODER_PROMPT, REVIEWER_PROMPT } from "../agents/prompts.js";
+import { PROMPTS } from "../prompts.js";
 import { cleanCodeOutput } from "../utils/cleaner.js";
 
 const MAX_RETRIES = 3;
@@ -39,14 +39,14 @@ function parsePlan(rawPlan: string): unknown {
 export async function runEdgeMultiAgent(userRequirement: string, apiKey: string): Promise<EdgeWorkflowResult> {
   if (!userRequirement.trim()) throw new Error("Requirement must not be empty");
   if (!apiKey.trim()) throw new Error("API key must not be empty");
-  const plan = parsePlan(await askAgent(apiKey, ARCHITECT_PROMPT, userRequirement));
-  let code = cleanCodeOutput(await askAgent(apiKey, CODER_PROMPT, JSON.stringify({ requirement: userRequirement, plan })));
-  let review = await askAgent(apiKey, REVIEWER_PROMPT, JSON.stringify({ requirement: userRequirement, plan, code }));
+  const plan = parsePlan(await askAgent(apiKey, PROMPTS.architect, userRequirement));
+  let code = cleanCodeOutput(await askAgent(apiKey, PROMPTS.coder, JSON.stringify({ requirement: userRequirement, plan })));
+  let review = await askAgent(apiKey, PROMPTS.reviewer, JSON.stringify({ requirement: userRequirement, plan, code }));
   let retries = 0;
   while (!/^\s*APPROVED\s*$/i.test(review.trim()) && retries < MAX_RETRIES) {
     retries += 1;
-    code = cleanCodeOutput(await askAgent(apiKey, CODER_PROMPT, JSON.stringify({ requirement: userRequirement, plan, previousCode: code, reviewerFeedback: review })));
-    review = await askAgent(apiKey, REVIEWER_PROMPT, JSON.stringify({ requirement: userRequirement, plan, code }));
+    code = cleanCodeOutput(await askAgent(apiKey, PROMPTS.coder, JSON.stringify({ requirement: userRequirement, plan, previousCode: code, reviewerFeedback: review })));
+    review = await askAgent(apiKey, PROMPTS.reviewer, JSON.stringify({ requirement: userRequirement, plan, code }));
   }
   return { status: /^\s*APPROVED\s*$/i.test(review.trim()) ? "APPROVED" : "CHANGES_REQUESTED", retries, code, plan, review };
 }

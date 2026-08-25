@@ -1,30 +1,32 @@
-# ECC Multi-Agent Orchestrator
+# Tencent EdgeOne Multi-Agent Hub
 
-Modular TypeScript/Node.js workflow for Architect -> Coder -> QA, with an optional MCP stdio client.
+Serverless Architect -> Coder -> QA workflow for Tencent EdgeOne Makers Edge Functions.
+The runtime uses only Web Standard APIs. Prompts are stored in memory and execution history can be written to an
+optional `EDGE_KV` binding.
 
-## Setup
+## Configuration
+
+Set `OPENAI_API_KEY` as a protected Edge Function environment variable. The handler also accepts `OPENAI_API_KEY`
+or a Bearer token in the request header for gateway integrations.
+
+## API
+
+`POST /` with JSON:
+
+```json
+{"requirement":"Build a TypeScript HTTP API for ..."}
+```
+
+The response contains `status`, `retries`, `code`, `plan`, and `review`. The Coder and Reviewer stages repeat up to
+three times when QA returns anything other than the exact `APPROVED` token.
+
+## Local validation
 
 ```bash
 npm install
 npm run typecheck
 npm run build
-npm start
 ```
 
-Node.js 20 or newer is required. Agent prompts and skill rules live in `.ecc/` and are loaded at runtime from the current project root.
-
-## Integrating a model
-
-Implement `AgentModel.complete()` in your application boundary and pass it to `new Orchestrator({ agents, model })`. The orchestrator does not embed an LLM SDK, so an HTTP model gateway, a local model, a serverless handler, or a test double can be used without changing the workflow.
-
-```ts
-const result = await new Orchestrator({ agents, model }).run({ prompt: userRequest });
-```
-
-Architect and QA responses must be JSON matching their prompt schemas. QA findings cause a coder/reviewer loop with at most three patch retries.
-
-## MCP
-
-`McpToolClient` uses `@modelcontextprotocol/sdk` over stdio. Connect it to a trusted MCP server, pass it as `mcp` to the orchestrator, and close it when the request lifecycle ends. The included `.vscode/mcp.json` demonstrates a filesystem server. Treat filesystem and terminal tools as privileged capabilities: use an allowlisted workspace, least privilege, timeouts, and explicit authorization before exposing them to agents.
-
-The core workflow is stateless between calls. For serverless or edge deployments, create the model and MCP transport per invocation, or use an HTTP-compatible MCP transport supplied by the SDK/runtime rather than relying on process-global state.
+Deploy `src/index.ts` as the EdgeOne Fetch Handler. No local filesystem, Node.js process API, or stdio MCP transport
+is required or used by the Edge runtime.

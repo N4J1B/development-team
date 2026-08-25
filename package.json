@@ -1,25 +1,14 @@
 {
-  "name": "ecc-multi-agent-orchestrator",
+  "name": "edgeone-multi-agent-hub",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Modular multi-agent software development orchestrator with MCP support.",
+  "description": "Serverless multi-agent software development hub for Tencent EdgeOne Makers.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
-  "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.0",
-    "zod": "^3.25.76"
-  },
   "devDependencies": {
-    "@types/node": "^22.20.1",
-    "tsx": "^4.19.4",
     "typescript": "^5.8.3"
   }
 }
