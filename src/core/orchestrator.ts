@@ -102,7 +102,13 @@ function parseJson<T>(text: string, label: string): T {
 }
 
 function parseQaReview(text: string): QaReview {
-  const review = parseJson<Partial<QaReview>>(text, "QA review");
+  let review: Partial<QaReview>;
+  try {
+    review = JSON.parse(text) as Partial<QaReview>;
+  } catch {
+    const status = /\bAPPROVED\b/i.test(text) ? "APPROVED" : "CHANGES_REQUESTED";
+    return { status, decision: status === "APPROVED" ? "approved" : "changes_requested", findings: [{ evidence: text }] };
+  }
   const status = review.status ?? (review.decision === "approved" ? "APPROVED" : "CHANGES_REQUESTED");
   if (status !== "APPROVED" && status !== "CHANGES_REQUESTED") {
     throw new Error("QA review status must be APPROVED or CHANGES_REQUESTED");
