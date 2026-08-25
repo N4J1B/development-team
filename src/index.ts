@@ -1,35 +1,46 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { loadAgents } from "./core/agent-loader.js";
-import { Orchestrator, type AgentModel, type WorkflowResult } from "./core/orchestrator.js";
+import { runEdgeMultiAgent, type EdgeWorkflowResult } from "./core/orchestrator.js";
 
-export const MAX_RETRIES = 3;
-
-/** Removes Markdown fences so the result can be written as a source file. */
-export function cleanCodeOutput(rawText: string): string {
-	return rawText
-		.replace(/^\s*```(?:[a-zA-Z0-9_+-]+)?\s*\r?\n?/i, "")
-		.replace(/\r?\n?\s*```\s*$/i, "")
-		.trim();
+export interface EdgeEnvironment {
+	OPENAI_API_KEY?: string;
+	EDGE_KV?: { put(key: string, value: string, options?: unknown): Promise<void> };
 }
 
-export async function runWorkflow(model: AgentModel, prompt: string): Promise<WorkflowResult> {
-	const agents = await loadAgents();
-	const orchestrator = new Orchestrator({ agents, model, maxRetries: MAX_RETRIES });
-	const result = await orchestrator.run({ prompt });
-	const finalCode = cleanCodeOutput(result.codeReport);
-	const outputDirectory = resolve(process.cwd(), "output");
+interface RequirementPayload { requirement?: unknown; }
 
-	await mkdir(outputDirectory, { recursive: true });
-	await writeFile(resolve(outputDirectory, "result.ts"), `${finalCode}\n`, "utf8");
+const corsHeaders = {
+	"Access-Control-Allow-Headers": "Content-Type, Authorization, OPENAI_API_KEY",
+	"Access-Control-Allow-Methods": "POST, OPTIONS",
+	"Access-Control-Allow-Origin": "*",
+};
 
-	if (result.review.status === "APPROVED") {
-		console.log(`QA APPROVED. Final code saved to ${resolve(outputDirectory, "result.ts")}`);
-	} else {
-		console.warn(`QA did not approve after ${result.attempts} attempt(s). Final code saved for inspection.`);
-	}
-
-	return result;
+function jsonResponse(body: unknown, status = 200): Response {
+	return new Response(JSON.stringify(body), {
+		status,
+		headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" },
+	});
 }
 
-export { loadAgents, Orchestrator };
+export default {
+	async fetch(request: Request, env: EdgeEnvironment): Promise<Response> {
+		if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
+		if (request.method !== "POST") return jsonResponse({ error: "Method Not Allowed" }, 405);
+
+		try {
+			const payload = (await request.json()) as RequirementPayload;
+			if (typeof payload.requirement !== "string" || !payload.requirement.trim()) {
+				return jsonResponse({ error: "Field 'requirement' must be a non-empty string" }, 400);
+			}
+			const apiKey = env.OPENAI_API_KEY
+				?? request.headers.get("OPENAI_API_KEY")
+				?? request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
+			if (!apiKey) return jsonResponse({ error: "Missing OPENAI_API_KEY" }, 500);
+			const result: EdgeWorkflowResult = await runEdgeMultiAgent(payload.requirement, apiKey);
+			if (env.EDGE_KV) await env.EDGE_KV.put(`workflow:${crypto.randomUUID()}`, JSON.stringify(result));
+			return jsonResponse(result, result.status === "APPROVED" ? 200 : 422);
+		} catch (error) {
+			return jsonResponse({ error: error instanceof Error ? error.message : "Unexpected error" }, 500);
+		}
+	},
+};
+
+export { runEdgeMultiAgent };

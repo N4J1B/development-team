@@ -1,122 +1,52 @@
-import type { AgentDefinition } from "./agent-loader.js";
-import { McpToolClient } from "../mcp/client.js";
+import { ARCHITECT_PROMPT, CODER_PROMPT, REVIEWER_PROMPT } from "../agents/prompts.js";
+import { cleanCodeOutput } from "../utils/cleaner.js";
 
-export interface AgentModel {
-  complete(input: { systemPrompt: string; userPrompt: string; mcp?: McpToolClient }): Promise<string>;
-}
+const MAX_RETRIES = 3;
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
-export interface WorkflowRequest {
-  prompt: string;
-  context?: string;
-}
-
-export interface TaskPlan {
-  summary: string;
-  tasks: Array<Record<string, unknown>>;
-  [key: string]: unknown;
-}
-
-export interface QaReview {
+export interface EdgeWorkflowResult {
   status: "APPROVED" | "CHANGES_REQUESTED";
-  decision: "approved" | "changes_requested";
-  findings: Array<Record<string, unknown>>;
-  [key: string]: unknown;
+  retries: number;
+  code: string;
+  plan: unknown;
+  review: string;
 }
 
-export interface WorkflowResult {
-  plan: TaskPlan;
-  codeReport: string;
-  review: QaReview;
-  attempts: number;
+interface ChatCompletionResponse {
+  choices?: Array<{ message?: { content?: string | null } }>;
 }
 
-export interface OrchestratorOptions {
-  agents: AgentDefinition[];
-  model: AgentModel;
-  mcp?: McpToolClient;
-  maxRetries?: number;
+async function askAgent(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string> {
+  const response = await fetch(OPENAI_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "gpt-4o-mini", temperature: 0, messages: [
+      { role: "system", content: systemPrompt }, { role: "user", content: userPrompt },
+    ] }),
+  });
+  if (!response.ok) throw new Error(`Model request failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
+  const data = (await response.json()) as ChatCompletionResponse;
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Model returned an empty response");
+  return content;
 }
 
-export class Orchestrator {
-  private readonly agentsByName: Map<string, AgentDefinition>;
-  private readonly maxRetries: number;
-
-  constructor(private readonly options: OrchestratorOptions) {
-    this.agentsByName = new Map(options.agents.map((agent) => [agent.name, agent]));
-    this.maxRetries = Math.max(0, Math.min(options.maxRetries ?? 3, 3));
-  }
-
-  async run(request: WorkflowRequest): Promise<WorkflowResult> {
-    const architect = this.requireAgent("architect");
-    const coder = this.requireAgent("backend-coder", "frontend-coder");
-    const reviewer = this.requireAgent("qa-reviewer");
-
-    const plan = parseJson<TaskPlan>(await this.complete(architect, request.prompt), "Architect plan");
-    let codeReport = await this.complete(coder, this.codePrompt(request, plan));
-    let review = parseQaReview(await this.complete(reviewer, this.reviewPrompt(request, plan, codeReport)));
-    let attempts = 1;
-
-    while (review.status !== "APPROVED" && attempts <= this.maxRetries) {
-      codeReport = await this.complete(coder, this.patchPrompt(request, plan, codeReport, review));
-      review = parseQaReview(await this.complete(reviewer, this.reviewPrompt(request, plan, codeReport)));
-      attempts += 1;
-    }
-
-    return { plan, codeReport, review, attempts };
-  }
-
-  private async complete(agent: AgentDefinition, userPrompt: string): Promise<string> {
-    let mcpContext = "";
-    if (this.options.mcp) {
-      const tools = await this.options.mcp.listTools();
-      mcpContext = `\nAvailable MCP tools (call only when needed):\n${JSON.stringify(tools.tools)}`;
-    }
-    return this.options.model.complete({ systemPrompt: `${agent.systemPrompt}${mcpContext}`, userPrompt, mcp: this.options.mcp });
-  }
-
-  private requireAgent(...names: string[]): AgentDefinition {
-    const agent = names.map((name) => this.agentsByName.get(name)).find(Boolean);
-    if (!agent) throw new Error(`Required agent not loaded: ${names.join(" or ")}`);
-    return agent;
-  }
-
-  private codePrompt(request: WorkflowRequest, plan: TaskPlan): string {
-    return `Implement this user request according to the Architect plan.\n\nRequest:\n${request.prompt}\n\nAdditional context:\n${request.context ?? "none"}\n\nPlan:\n${JSON.stringify(plan, null, 2)}`;
-  }
-
-  private reviewPrompt(request: WorkflowRequest, plan: TaskPlan, codeReport: string): string {
-    return `Review the implementation for this request. Return JSON with status exactly APPROVED or CHANGES_REQUESTED.\n\nRequest:\n${request.prompt}\n\nPlan:\n${JSON.stringify(plan, null, 2)}\n\nCoder report and available implementation state:\n${codeReport}`;
-  }
-
-  private patchPrompt(request: WorkflowRequest, plan: TaskPlan, codeReport: string, review: QaReview): string {
-    return `Patch the implementation based on the QA findings. Preserve passing behavior and acceptance criteria.\n\nRequest:\n${request.prompt}\n\nPlan:\n${JSON.stringify(plan, null, 2)}\n\nPrevious coder report:\n${codeReport}\n\nQA findings:\n${JSON.stringify(review, null, 2)}`;
-  }
+function parsePlan(rawPlan: string): unknown {
+  const cleaned = rawPlan.replace(/^\s*```(?:json)?\s*\r?\n/i, "").replace(/\r?\n?\s*```\s*$/i, "").trim();
+  try { return JSON.parse(cleaned) as unknown; } catch { throw new Error("Architect returned invalid JSON"); }
 }
 
-function parseJson<T>(text: string, label: string): T {
-  try {
-    return JSON.parse(text) as T;
-  } catch (error) {
-    throw new Error(`${label} must be valid JSON`, { cause: error });
+export async function runEdgeMultiAgent(userRequirement: string, apiKey: string): Promise<EdgeWorkflowResult> {
+  if (!userRequirement.trim()) throw new Error("Requirement must not be empty");
+  if (!apiKey.trim()) throw new Error("API key must not be empty");
+  const plan = parsePlan(await askAgent(apiKey, ARCHITECT_PROMPT, userRequirement));
+  let code = cleanCodeOutput(await askAgent(apiKey, CODER_PROMPT, JSON.stringify({ requirement: userRequirement, plan })));
+  let review = await askAgent(apiKey, REVIEWER_PROMPT, JSON.stringify({ requirement: userRequirement, plan, code }));
+  let retries = 0;
+  while (!/^\s*APPROVED\s*$/i.test(review.trim()) && retries < MAX_RETRIES) {
+    retries += 1;
+    code = cleanCodeOutput(await askAgent(apiKey, CODER_PROMPT, JSON.stringify({ requirement: userRequirement, plan, previousCode: code, reviewerFeedback: review })));
+    review = await askAgent(apiKey, REVIEWER_PROMPT, JSON.stringify({ requirement: userRequirement, plan, code }));
   }
-}
-
-function parseQaReview(text: string): QaReview {
-  let review: Partial<QaReview>;
-  try {
-    review = JSON.parse(text) as Partial<QaReview>;
-  } catch {
-    const status = /\bAPPROVED\b/i.test(text) ? "APPROVED" : "CHANGES_REQUESTED";
-    return { status, decision: status === "APPROVED" ? "approved" : "changes_requested", findings: [{ evidence: text }] };
-  }
-  const status = review.status ?? (review.decision === "approved" ? "APPROVED" : "CHANGES_REQUESTED");
-  if (status !== "APPROVED" && status !== "CHANGES_REQUESTED") {
-    throw new Error("QA review status must be APPROVED or CHANGES_REQUESTED");
-  }
-  return {
-    ...review,
-    status,
-    decision: status === "APPROVED" ? "approved" : "changes_requested",
-    findings: review.findings ?? [],
-  };
+  return { status: /^\s*APPROVED\s*$/i.test(review.trim()) ? "APPROVED" : "CHANGES_REQUESTED", retries, code, plan, review };
 }
