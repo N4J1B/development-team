@@ -6,8 +6,9 @@ optional `EDGE_KV` binding.
 
 ## Configuration
 
-Set `OPENAI_API_KEY` as a protected Edge Function environment variable. The handler also accepts `OPENAI_API_KEY`
-or a Bearer token in the request header for gateway integrations.
+Set `OPENAI_API_KEY` as a protected environment variable in the EdgeOne Makers project settings. The `.env.example`
+file is only a local reference and must not contain a real secret. Request-provided API keys are disabled by default;
+only enable `ALLOW_REQUEST_API_KEY=true` for a separately authenticated gateway.
 
 ## API
 

@@ -2,6 +2,7 @@ import { runEdgeMultiAgent, type EdgeWorkflowResult } from "./core/orchestrator.
 
 export interface EdgeEnvironment {
 	OPENAI_API_KEY?: string;
+	ALLOW_REQUEST_API_KEY?: string;
 	EDGE_KV?: { put(key: string, value: string, options?: unknown): Promise<void> };
 }
 
@@ -31,8 +32,10 @@ export default {
 				return jsonResponse({ error: "Field 'requirement' must be a non-empty string" }, 400);
 			}
 			const apiKey = env.OPENAI_API_KEY
-				?? request.headers.get("OPENAI_API_KEY")
-				?? request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
+				?? (env.ALLOW_REQUEST_API_KEY === "true"
+					? request.headers.get("OPENAI_API_KEY")
+						?? request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "")
+					: undefined);
 			if (!apiKey) return jsonResponse({ error: "Missing OPENAI_API_KEY" }, 500);
 			const result: EdgeWorkflowResult = await runEdgeMultiAgent(payload.requirement, apiKey);
 			if (env.EDGE_KV) await env.EDGE_KV.put(`workflow:${crypto.randomUUID()}`, JSON.stringify(result));
