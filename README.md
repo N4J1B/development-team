@@ -15,11 +15,15 @@ only enable `ALLOW_REQUEST_API_KEY=true` for a separately authenticated gateway.
 `POST /` with JSON:
 
 ```json
-{"requirement":"Build a TypeScript HTTP API for ..."}
+{"requirement":"Build a TypeScript HTTP API for ...","conversationId":"project-123"}
 ```
 
 The response contains `status`, `retries`, `code`, `plan`, and `review`. The Coder and Reviewer stages repeat up to
-three times when QA returns anything other than the exact `APPROVED` token.
+three times when QA returns anything other than the exact `APPROVED` token. When `conversationId` and `EDGE_KV` are
+available, prior workflow context is loaded and the latest result is persisted under that conversation.
+
+Set `MODEL_GATEWAY_URL` and `MODEL_NAME` when using an EdgeOne-compatible model gateway. Set `AGENT_AUTH_TOKEN` to
+require a Bearer token from calling agents; this is separate from the provider `OPENAI_API_KEY`.
 
 ## Local validation
 
